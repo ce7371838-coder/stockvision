@@ -1,0 +1,18 @@
+# Variables privadas
+backend/.env
+.env
+
+# Dependencias
+frontend/node_modules/
+backend/node_modules/
+
+# Compilación
+frontend/dist/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Sistema/editor
+.DS_Store
+.vscode/
