@@ -228,6 +228,45 @@ function App() {
     }
   }
 
+  useEffect(() => {
+    const cargarHistorialPortafolio = async () => {
+      if (!portafolioId) {
+        setHistorial([])
+        return
+      }
+
+      try {
+        const respuesta = await fetch(
+          `/api/portfolios/${portafolioId}/history`
+        )
+
+        const datos = await respuesta.json()
+
+        if (!respuesta.ok) {
+          throw new Error(
+            datos.message || 'No fue posible consultar el historial'
+          )
+        }
+
+        setHistorial(
+          datos.map((item) => ({
+            ...item,
+            cantidad: Number(item.cantidad),
+            precio: Number(item.precio),
+            total: Number(item.total),
+            ganancia: Number(item.ganancia || 0),
+            fecha: new Date(item.fecha).toLocaleString('es-MX')
+          }))
+        )
+      } catch (error) {
+        console.error('Error cargando historial:', error)
+        setHistorial([])
+      }
+    }
+
+    cargarHistorialPortafolio()
+  }, [portafolioId])
+
   const capitalInvertido = posiciones.reduce(
     (total, item) => total + item.cantidad * item.precioCompra,
     0
@@ -238,7 +277,12 @@ function App() {
     0
   )
 
-  const utilidad = valorActual - capitalInvertido
+  const gananciaRealizada = historial
+    .filter((item) => item.tipo === 'VENTA')
+    .reduce((total, item) => total + Number(item.ganancia || 0), 0)
+
+  const utilidadNoRealizada = valorActual - capitalInvertido
+  const utilidad = utilidadNoRealizada + gananciaRealizada
 
   const abrirOperacion = (item) => {
     setAccion(item)
@@ -605,13 +649,79 @@ function App() {
                     Portafolio
                   </p>
                   <h4 className="text-lg font-black">{item.nombre}</h4>
-                  <div className="mt-4 flex justify-between">
+                  <div className="mt-4 flex justify-between gap-4">
                     <span className="text-sm text-slate-500">Presupuesto</span>
                     <strong>{dinero(item.presupuesto)}</strong>
                   </div>
-                  <div className="mt-2 flex justify-between">
-                    <span className="text-sm text-slate-500">Saldo disponible</span>
+
+                  <div className="mt-2 flex justify-between gap-4">
+                    <span className="text-sm text-slate-500">
+                      Saldo disponible
+                    </span>
                     <strong>{dinero(item.saldo)}</strong>
+                  </div>
+
+                  <div className="my-4 border-t border-slate-200" />
+
+                  <div className="flex justify-between gap-4">
+                    <span className="text-sm text-slate-500">Compras</span>
+                    <strong>{dinero(item.totalCompras || 0)}</strong>
+                  </div>
+
+                  <div className="mt-1 flex justify-between gap-4">
+                    <span className="text-xs text-slate-500">
+                      Precio promedio de compra
+                    </span>
+                    <strong className="text-sm">
+                      {dinero(item.precioPromedioCompra || 0)}
+                    </strong>
+                  </div>
+
+                  <div className="mt-3 flex justify-between gap-4">
+                    <span className="text-sm text-slate-500">Ventas</span>
+                    <strong>{dinero(item.totalVentas || 0)}</strong>
+                  </div>
+
+                  <div className="mt-1 flex justify-between gap-4">
+                    <span className="text-xs text-slate-500">
+                      Precio promedio de venta
+                    </span>
+                    <strong className="text-sm">
+                      {dinero(item.precioPromedioVenta || 0)}
+                    </strong>
+                  </div>
+
+                  <div className="mt-4 flex justify-between gap-4">
+                    <span className="text-sm font-semibold text-slate-600">
+                      Ganancia / Pérdida
+                    </span>
+
+                    <strong
+                      className={
+                        Number(item.gananciaPerdida || 0) >= 0
+                          ? 'text-emerald-600'
+                          : 'text-rose-600'
+                      }
+                    >
+                      {Number(item.gananciaPerdida || 0) > 0 ? '+' : ''}
+                      {dinero(item.gananciaPerdida || 0)}
+                    </strong>
+                  </div>
+
+                  <div className="mt-4 rounded-xl bg-slate-100 p-3 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-slate-500">
+                        Compras realizadas:
+                      </span>
+                      <strong>{item.cantidadCompras || 0}</strong>
+                    </div>
+
+                    <div className="mt-1 flex justify-between">
+                      <span className="text-slate-500">
+                        Ventas realizadas:
+                      </span>
+                      <strong>{item.cantidadVentas || 0}</strong>
+                    </div>
                   </div>
                 </button>
               ))}

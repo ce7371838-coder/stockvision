@@ -119,22 +119,182 @@ app.get('/api/stocks/:symbol', async (req, res) => {
 app.get('/api/portfolios', async (_req, res) => {
   try {
     const resultado = await pool.query(
-      'SELECT id, nombre, presupuesto, saldo, created_at FROM portfolios ORDER BY id'
+      `WITH operaciones AS (
+         SELECT
+           portfolio_id,
+
+           COALESCE(
+             SUM(CASE
+               WHEN tipo = 'BUY' THEN cantidad * precio
+               ELSE 0
+             END),
+             0
+           ) AS total_compras,
+
+           COALESCE(
+             SUM(CASE
+               WHEN tipo = 'SELL' THEN cantidad * precio
+               ELSE 0
+             END),
+             0
+           ) AS total_ventas,
+
+           COUNT(*) FILTER (WHERE tipo = 'BUY') AS cantidad_compras,
+           COUNT(*) FILTER (WHERE tipo = 'SELL') AS cantidad_ventas,
+
+           COALESCE(
+             SUM(CASE
+               WHEN tipo = 'BUY' THEN cantidad * precio
+               ELSE 0
+             END)
+             /
+             NULLIF(
+               SUM(CASE
+                 WHEN tipo = 'BUY' THEN cantidad
+                 ELSE 0
+               END),
+               0
+             ),
+             0
+           ) AS precio_promedio_compra,
+
+           COALESCE(
+             SUM(CASE
+               WHEN tipo = 'SELL' THEN cantidad * precio
+               ELSE 0
+             END)
+             /
+             NULLIF(
+               SUM(CASE
+                 WHEN tipo = 'SELL' THEN cantidad
+                 ELSE 0
+               END),
+               0
+             ),
+             0
+           ) AS precio_promedio_venta
+
+         FROM transactions
+         GROUP BY portfolio_id
+       ),
+
+       resumen_acciones AS (
+         SELECT
+           t.portfolio_id,
+           t.stock_id,
+
+           SUM(CASE
+             WHEN t.tipo = 'BUY' THEN t.cantidad
+             ELSE 0
+           END) AS cantidad_comprada,
+
+           SUM(CASE
+             WHEN t.tipo = 'BUY' THEN t.cantidad * t.precio
+             ELSE 0
+           END) AS costo_compras,
+
+           SUM(CASE
+             WHEN t.tipo = 'SELL' THEN t.cantidad
+             ELSE 0
+           END) AS cantidad_vendida,
+
+           SUM(CASE
+             WHEN t.tipo = 'SELL' THEN t.cantidad * t.precio
+             ELSE 0
+           END) AS ingreso_ventas,
+
+           MAX(s.precio_actual) AS precio_actual
+
+         FROM transactions t
+         JOIN stocks s ON s.id = t.stock_id
+         GROUP BY t.portfolio_id, t.stock_id
+       ),
+
+       rendimiento AS (
+         SELECT
+           portfolio_id,
+
+           SUM(
+             ingreso_ventas
+             -
+             (
+               cantidad_vendida
+               *
+               COALESCE(
+                 costo_compras / NULLIF(cantidad_comprada, 0),
+                 0
+               )
+             )
+             +
+             (
+               (cantidad_comprada - cantidad_vendida)
+               *
+               (
+                 precio_actual
+                 -
+                 COALESCE(
+                   costo_compras / NULLIF(cantidad_comprada, 0),
+                   0
+                 )
+               )
+             )
+           ) AS ganancia_perdida
+
+         FROM resumen_acciones
+         GROUP BY portfolio_id
+       )
+
+       SELECT
+         p.id,
+         p.nombre,
+         p.presupuesto,
+         p.saldo,
+         p.created_at,
+
+         COALESCE(o.total_compras, 0) AS total_compras,
+         COALESCE(o.total_ventas, 0) AS total_ventas,
+         COALESCE(o.cantidad_compras, 0) AS cantidad_compras,
+         COALESCE(o.cantidad_ventas, 0) AS cantidad_ventas,
+         COALESCE(o.precio_promedio_compra, 0) AS precio_promedio_compra,
+         COALESCE(o.precio_promedio_venta, 0) AS precio_promedio_venta,
+         COALESCE(r.ganancia_perdida, 0) AS ganancia_perdida
+
+       FROM portfolios p
+       LEFT JOIN operaciones o ON o.portfolio_id = p.id
+       LEFT JOIN rendimiento r ON r.portfolio_id = p.id
+       ORDER BY p.id`
     )
 
-    res.json(resultado.rows.map(portafolio => ({
-      ...portafolio,
-      presupuesto: Number(portafolio.presupuesto),
-      saldo: Number(portafolio.saldo)
-    })))
+    res.json(
+      resultado.rows.map(portafolio => ({
+        id: portafolio.id,
+        nombre: portafolio.nombre,
+        presupuesto: Number(portafolio.presupuesto),
+        saldo: Number(portafolio.saldo),
+        created_at: portafolio.created_at,
+
+        totalCompras: Number(portafolio.total_compras),
+        totalVentas: Number(portafolio.total_ventas),
+
+        cantidadCompras: Number(portafolio.cantidad_compras),
+        cantidadVentas: Number(portafolio.cantidad_ventas),
+
+        precioPromedioCompra: Number(portafolio.precio_promedio_compra),
+        precioPromedioVenta: Number(portafolio.precio_promedio_venta),
+
+        gananciaPerdida: Number(portafolio.ganancia_perdida)
+      }))
+    )
   } catch (error) {
     console.error('Error obteniendo portafolios:', error)
+
     res.status(500).json({
       ok: false,
       message: 'No fue posible obtener los portafolios'
     })
   }
 })
+
 
 app.post('/api/portfolios', async (req, res) => {
   try {
@@ -322,6 +482,82 @@ app.get('/api/portfolios/:id/positions', async (req, res) => {
   }
 })
 
+
+
+app.get('/api/portfolios/:id/history', async (req, res) => {
+  try {
+    const portfolioId = Number(req.params.id)
+
+    if (!Number.isInteger(portfolioId) || portfolioId <= 0) {
+      return res.status(400).json({
+        ok: false,
+        message: 'Portafolio inválido'
+      })
+    }
+
+    const resultado = await pool.query(
+      `SELECT
+         t.id,
+         CASE
+           WHEN t.tipo = 'BUY' THEN 'COMPRA'
+           WHEN t.tipo = 'SELL' THEN 'VENTA'
+           ELSE t.tipo
+         END AS tipo,
+         s.symbol,
+         s.empresa AS name,
+         t.cantidad,
+         t.precio,
+         t.cantidad * t.precio AS total,
+         t.fecha,
+         CASE
+           WHEN t.tipo = 'SELL' THEN
+             (
+               t.precio -
+               COALESCE(
+                 (
+                   SELECT
+                     SUM(tb.cantidad * tb.precio)
+                     / NULLIF(SUM(tb.cantidad), 0)
+                   FROM transactions tb
+                   WHERE tb.portfolio_id = t.portfolio_id
+                     AND tb.stock_id = t.stock_id
+                     AND tb.tipo = 'BUY'
+                     AND tb.fecha <= t.fecha
+                 ),
+                 0
+               )
+             ) * t.cantidad
+           ELSE 0
+         END AS ganancia
+       FROM transactions t
+       JOIN stocks s ON s.id = t.stock_id
+       WHERE t.portfolio_id = $1
+       ORDER BY t.fecha DESC, t.id DESC`,
+      [portfolioId]
+    )
+
+    res.json(
+      resultado.rows.map(item => ({
+        id: item.id,
+        tipo: item.tipo,
+        symbol: item.symbol,
+        name: item.name,
+        cantidad: Number(item.cantidad),
+        precio: Number(item.precio),
+        total: Number(item.total),
+        ganancia: Number(item.ganancia),
+        fecha: item.fecha
+      }))
+    )
+  } catch (error) {
+    console.error('Error obteniendo historial:', error)
+
+    res.status(500).json({
+      ok: false,
+      message: 'No fue posible obtener el historial'
+    })
+  }
+})
 
 app.post('/api/sell', async (req, res) => {
   const client = await pool.connect()
